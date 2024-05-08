@@ -1,79 +1,124 @@
 import torch
 import torch.nn as nn
+import torch.optim as optim
 import torch.nn.functional as F
 
-class MultiSourceModelWithMaskGuidedEmbedding(nn.Module):
-    def __init__(self, dynamic_input_dims, mask_input_dims, static_input_dim, num_sources, embedding_dim, time_embedding_dim, output_dim):
-        super(MultiSourceModelWithMaskGuidedEmbedding, self).__init__()
-        self.num_sources = num_sources
-        # 动态数据源编码器
-        self.dynamic_encoders = nn.ModuleList([
-            nn.Linear(dynamic_input_dims[k], embedding_dim) for k in range(num_sources)
-        ])
-        # 遮罩矩阵编码器
-        self.mask_encoders = nn.ModuleList([
-            nn.Linear(mask_input_dims[k], embedding_dim) for k in range(num_sources)
-        ])
-        # 时间编码器
-        self.time_encoders = nn.ModuleList([
-            nn.Linear(1, time_embedding_dim) for _ in range(num_sources)
-        ])
-        self.static_encoder = nn.Linear(static_input_dim, embedding_dim)
-        self.mha = nn.MultiheadAttention(embedding_dim, num_heads=8)
-        self.cross_attention = nn.MultiheadAttention(embedding_dim, num_heads=8)  # 交叉注意力模块
-        self.ffn = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim),
-            nn.ReLU(),
-            nn.Linear(embedding_dim, output_dim)
-        )
+import random
 
-    def forward(self, dynamic_sources, time_stamps, masks, static_source):
-        dynamic_embeddings = []
-        mask_embeddings = []
-        for k, (source, time_stamp, mask) in enumerate(zip(dynamic_sources, time_stamps, masks)):
-            time_embedding = torch.tanh(self.time_encoders[k](time_stamp.unsqueeze(-1)))
-            mask_embedding = torch.tanh(self.mask_encoders[k](mask))
-            dynamic_embedding = self.dynamic_encoders[k](source) + time_embedding
-            dynamic_embeddings.append(dynamic_embedding)
-            mask_embeddings.append(mask_embedding)
-        
-        # 将动态嵌入和遮罩嵌入合并，准备进行多头自注意力处理
-        dynamic_embeddings = torch.stack(dynamic_embeddings)
-        mask_embeddings = torch.stack(mask_embeddings)
-        
-        # 应用多头自注意力模块
-        dynamic_attn_output, _ = self.mha(dynamic_embeddings, dynamic_embeddings, dynamic_embeddings)
-        mask_attn_output, _ = self.mha(mask_embeddings, mask_embeddings, mask_embeddings)
-        
-        # 应用交叉注意力模块
-        cross_attn_output, _ = self.cross_attention(query=dynamic_attn_output, key=mask_attn_output, value=mask_attn_output)
-        
-        # 平均池化和静态源处理
-        avg_pooled = torch.mean(cross_attn_output, dim=0, keepdim=True)
-        static_embedding = F.leaky_relu(self.static_encoder(static_source))
-        
-        # 合并动态和静态嵌入
-        combined_embedding = torch.cat([avg_pooled.squeeze(0), static_embedding], dim=-1)
-        
-        # 最终表示
-        final_representation = self.ffn(combined_embedding)
-
-        return final_representation
+# 嵌入层定义
+class TimeEmbedding(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(TimeEmbedding, self).__init__()
+        self.fc = nn.Linear(input_dim, output_dim)
     
-    def contrastive_loss(self, embeddings, labels):
-        n = embeddings.size(0)
-        cos_sim = F.cosine_similarity(embeddings.unsqueeze(1), embeddings.unsqueeze(0), dim=2)
-        losses = []
-        for i in range(n):
-            for k in range(self.num_sources):
-                for j in range(i + 1, n):
-                    if labels[i] == labels[j]:
-                        # Positive pair
-                        pos_loss = 1 - cos_sim[i, j]
-                        losses.append(F.relu(pos_loss + self.psi))
-                    else:
-                        # Negative pair
-                        neg_loss = cos_sim[i, j]
-                        losses.append(F.relu(self.psi - neg_loss))
-        loss = sum(losses) / len(losses) if losses else torch.tensor(0.0)
-        return loss
+    def forward(self, t):
+        return torch.tanh(self.fc(t))
+
+class MaskGuidedSequenceEmbedding(nn.Module):
+    def __init__(self, input_dim, mask_dim, time_dim, embed_dim, num_heads):
+        super(MaskGuidedSequenceEmbedding, self).__init__()
+        self.time_embedding = TimeEmbedding(time_dim, embed_dim)
+        self.value_embedding = nn.Linear(input_dim, embed_dim)
+        self.mask_embedding = nn.Linear(mask_dim, embed_dim)
+        self.self_attention = nn.MultiheadAttention(embed_dim, num_heads)
+    
+    def forward(self, x, m, t):
+        time_embed = self.time_embedding(t)
+        x_embed = self.value_embedding(x) + time_embed
+        m_embed = self.mask_embedding(m) + time_embed
+        x_out, _ = self.self_attention(x_embed, x_embed, x_embed)
+        m_out, _ = self.self_attention(m_embed, m_embed, m_embed)
+        return x_out, m_out
+
+class CrossSourceFusion(nn.Module):
+    def __init__(self, embed_dim, num_heads):
+        super(CrossSourceFusion, self).__init__()
+        self.self_attention = nn.MultiheadAttention(embed_dim, num_heads)
+    
+    def forward(self, embeddings):
+        embeddings = torch.cat(embeddings, dim=0)
+        out, _ = self.self_attention(embeddings, embeddings, embeddings)
+        return out
+
+# 分类器定义
+class FinalClassification(nn.Module):
+    def __init__(self, input_dim):
+        super(FinalClassification, self).__init__()
+        self.fc1 = nn.Linear(input_dim, 128)
+        self.fc2 = nn.Linear(128, 1)
+        self.dropout = nn.Dropout(0.5)
+    
+    def forward(self, x):
+        x = F.leaky_relu(self.fc1(x))
+        x = self.dropout(x)
+        return torch.sigmoid(self.fc2(x))
+
+# 多源模型定义
+class MultiSourceModel(nn.Module):
+    def __init__(self, input_dims, mask_dims, time_dims, embed_dim, num_heads):
+        super(MultiSourceModel, self).__init__()
+        self.sequence_embeddings = nn.ModuleList([
+            MaskGuidedSequenceEmbedding(in_dim, mask_dim, time_dim, embed_dim, num_heads) 
+            for in_dim, mask_dim, time_dim in zip(input_dims, mask_dims, time_dims)
+        ])
+        self.cross_source_fusion = CrossSourceFusion(embed_dim, num_heads)
+        self.final_classification = FinalClassification(embed_dim + len(input_dims) * embed_dim)
+
+    def forward(self, x_list, m_list, t_list):
+        embeddings = [seq_embed(x, m, t) for seq_embed, x, m, t in zip(self.sequence_embeddings, x_list, m_list, t_list)]
+        fused = self.cross_source_fusion([x_out for x_out, _ in embeddings])
+        concat_embeddings = torch.cat([fused] + [x_out for x_out, _ in embeddings], dim=1)
+        return self.final_classification(concat_embeddings)
+
+# 损失函数定义
+def focal_loss(pred, target, gamma=2.0, beta=0.5):
+    pred = pred.clamp(1e-5, 1 - 1e-5)
+    loss = -beta * (1 - pred)**gamma * target * torch.log(pred) - (1 - beta) * pred**gamma * (1 - target) * torch.log(1 - pred)
+    return loss.mean()
+
+def reconstruction_loss(reconstructions, x_list, m_list):
+    loss = 0.0
+    for recon, x, m in zip(reconstructions, x_list, m_list):
+        loss += ((recon - x) * m).pow(2).mean()
+    return loss
+
+def contrastive_loss(pooled_embeddings, margin=1.0):
+    B = pooled_embeddings[0].shape[0]  # Batch size
+    K = len(pooled_embeddings)         # Number of data sources
+    loss = 0.0
+    # Iterate over each sample in the batch
+    for b in range(B):
+        # Randomly select a different sample j from the batch, j != b
+        j = random.choice([x for x in range(B) if x != b])
+        # Iterate over each pair of data sources
+        for k in range(K):
+            for k_prime in range(K):
+                if k != k_prime:
+                    # Calculate the distance between embeddings from the same data source for sample b
+                    dist_same = F.pairwise_distance(pooled_embeddings[k][b].unsqueeze(0), pooled_embeddings[k_prime][b].unsqueeze(0))
+                    # Calculate the distance between embeddings from the same data source for sample b and different sample j
+                    dist_diff = F.pairwise_distance(pooled_embeddings[k][b].unsqueeze(0), pooled_embeddings[k_prime][j].unsqueeze(0))
+                    loss += F.relu(dist_same - dist_diff + margin).mean()
+    # Normalize the loss by the number of comparisons
+    return loss / (B * K * (K - 1))
+
+# 训练函数定义
+def train_model(model, train_loader, num_epochs=20, lr=0.001, lambda_focal=1.0, lambda_recon=0.5, lambda_contrast=0.3):
+    optimizer = optim.Adam(model.parameters(), lr=lr)
+    model.train()
+
+    for epoch in range(num_epochs):
+        total_loss = 0
+        for x_list, m_list, t_list, target in train_loader:
+            optimizer.zero_grad()
+            output = model(x_list, m_list, t_list)
+            loss = focal_loss(output, target)
+            reconstructions = [model.reconstruct(x, m, t) for x, m, t in zip(x_list, m_list, t_list)]
+            rec_loss = reconstruction_loss(reconstructions, x_list, m_list)
+            pooled_embeddings = [model.pool(x_out) for x_out, _ in model(x_list, m_list, t_list)]
+            cont_loss = contrastive_loss(pooled_embeddings)
+            total_loss = lambda_focal * loss + lambda_recon * rec_loss + lambda_contrast * cont_loss
+            total_loss.backward()
+            optimizer.step()
+            total_loss += total_loss.item()
+        print(f"Epoch {epoch+1}, Loss: {total_loss/len(train_loader)}")
