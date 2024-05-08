@@ -68,7 +68,8 @@ class MultiSourceModel(nn.Module):
         embeddings = [seq_embed(x, m, t) for seq_embed, x, m, t in zip(self.sequence_embeddings, x_list, m_list, t_list)]
         fused = self.cross_source_fusion([x_out for x_out, _ in embeddings])
         concat_embeddings = torch.cat([fused] + [x_out for x_out, _ in embeddings], dim=1)
-        return self.final_classification(concat_embeddings)
+        classification_output = self.final_classification(concat_embeddings)
+        return classification_output, embeddings
 
 # 损失函数定义
 def focal_loss(pred, target, gamma=2.0, beta=0.5):
@@ -111,11 +112,11 @@ def train_model(model, train_loader, num_epochs=20, lr=0.001, lambda_focal=1.0, 
         total_loss = 0
         for x_list, m_list, t_list, target in train_loader:
             optimizer.zero_grad()
-            output = model(x_list, m_list, t_list)
-            loss = focal_loss(output, target)
+            classification_output, embeddings = model(x_list, m_list, t_list)
+            loss = focal_loss(classification_output, target)
             reconstructions = [model.reconstruct(x, m, t) for x, m, t in zip(x_list, m_list, t_list)]
             rec_loss = reconstruction_loss(reconstructions, x_list, m_list)
-            pooled_embeddings = [model.pool(x_out) for x_out, _ in model(x_list, m_list, t_list)]
+            pooled_embeddings = [torch.mean(x_out, dim=0) for x_out, _ in embeddings]  # Assuming pooling is mean pooling
             cont_loss = contrastive_loss(pooled_embeddings)
             total_loss = lambda_focal * loss + lambda_recon * rec_loss + lambda_contrast * cont_loss
             total_loss.backward()
