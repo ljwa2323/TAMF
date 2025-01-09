@@ -16,3 +16,68 @@ The framework is enhanced with a contrastive loss method that reduces the relati
 - Contrastive Loss Method: Minimizes the distance between different source embeddings, promoting effective data fusion.
 - Auxiliary Reconstruction Tasks: Utilizes missing masks for original sequence reconstruction, enhancing fusion representations between sources.
 
+### Installation
+```bash
+git clone https://github.com/yourusername/your-repo-name.git
+cd your-repo-name
+pip install -r requirements.txt
+```
+
+### Usage
+
+The main training script accepts various command-line arguments to customize the model training:
+
+```bash
+python deep_learning/main.py \
+    --data_path /path/to/your/data \
+    --input_dims 64 32 48 \
+    --mask_dims 64 32 48 \
+    --time_dims 1 1 1 \
+    --embed_dim 256 \
+    --num_heads 8 \
+    --batch_size 32 \
+    --epochs 20 \
+    --lr 0.001 \
+    --lambda_focal 1.0 \
+    --lambda_recon 0.5 \
+    --lambda_contrast 0.3
+```
+
+#### Key Arguments:
+
+- Model Parameters:
+  - `--embed_dim`: Dimension of the embedding space (default: 256)
+  - `--num_heads`: Number of attention heads (default: 8)
+  - `--static_dim`: Dimension of static features (optional)
+
+- Training Parameters:
+  - `--batch_size`: Batch size for training (default: 32)
+  - `--epochs`: Number of training epochs (default: 20)
+  - `--lr`: Learning rate (default: 0.001)
+  - `--lambda_focal`: Weight for focal loss (default: 1.0)
+  - `--lambda_recon`: Weight for reconstruction loss (default: 0.5)
+  - `--lambda_contrast`: Weight for contrastive loss (default: 0.3)
+
+- Data Parameters:
+  - `--data_path`: Path to the data directory (required)
+  - `--input_dims`: Input dimensions for each source (required)
+  - `--mask_dims`: Mask dimensions for each source (required)
+  - `--time_dims`: Time dimensions for each source (required)
+
+- Other Parameters:
+  - `--device`: Device to use for training (default: 'cuda' if available, else 'cpu')
+  - `--save_dir`: Directory to save model checkpoints (default: 'checkpoints')
+  - `--log_interval`: Print loss every n batches (default: 100)
+
+### Model Checkpoints
+
+The training script automatically saves model checkpoints every 5 epochs in the specified `save_dir`. Each checkpoint contains:
+- Model state dict
+- Optimizer state dict
+- Current epoch
+- Current loss
+
+### Logging
+
+Training progress and metrics are logged both to the console and to a log file in the `save_dir`. The log file name includes the timestamp of when training started.
+
