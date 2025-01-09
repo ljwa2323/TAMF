@@ -40,7 +40,10 @@ python deep_learning/main.py \
     --lr 0.001 \
     --lambda_focal 1.0 \
     --lambda_recon 0.5 \
-    --lambda_contrast 0.3
+    --lambda_contrast 0.3 \
+    --contrast_margin 1.0 \
+    --focal_gamma 2.0 \
+    --focal_beta 0.5
 ```
 
 #### Key Arguments:
@@ -54,9 +57,14 @@ python deep_learning/main.py \
   - `--batch_size`: Batch size for training (default: 32)
   - `--epochs`: Number of training epochs (default: 20)
   - `--lr`: Learning rate (default: 0.001)
+
+- Loss Function Parameters:
   - `--lambda_focal`: Weight for focal loss (default: 1.0)
   - `--lambda_recon`: Weight for reconstruction loss (default: 0.5)
   - `--lambda_contrast`: Weight for contrastive loss (default: 0.3)
+  - `--contrast_margin`: Margin parameter for contrastive loss (default: 1.0)
+  - `--focal_gamma`: Gamma parameter for focal loss (default: 2.0)
+  - `--focal_beta`: Beta parameter for focal loss (default: 0.5)
 
 - Data Parameters:
   - `--data_path`: Path to the data directory (required)

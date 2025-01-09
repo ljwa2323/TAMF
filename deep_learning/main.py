@@ -23,6 +23,12 @@ def parse_args():
     parser.add_argument('--lambda_focal', type=float, default=1.0, help='Weight for focal loss')
     parser.add_argument('--lambda_recon', type=float, default=0.5, help='Weight for reconstruction loss')
     parser.add_argument('--lambda_contrast', type=float, default=0.3, help='Weight for contrastive loss')
+    parser.add_argument('--contrast_margin', type=float, default=1.0, 
+                        help='Margin for contrastive loss (default: 1.0)')
+    parser.add_argument('--focal_gamma', type=float, default=2.0,
+                        help='Gamma parameter for focal loss (default: 2.0)')
+    parser.add_argument('--focal_beta', type=float, default=0.5,
+                        help='Beta parameter for focal loss (default: 0.5)')
     
     # 数据参数
     parser.add_argument('--data_path', type=str, required=True, help='Path to data directory')
@@ -72,10 +78,11 @@ def train_epoch(model, train_loader, optimizer, args):
         classification_output, embeddings, reconstructions = model(x_list, m_list, t_list, static)
         
         # 计算损失
-        focal = focal_loss(classification_output, target)
+        focal = focal_loss(classification_output, target, 
+                          gamma=args.focal_gamma, beta=args.focal_beta)
         recon = reconstruction_loss(reconstructions, x_list, m_list)
         pooled_embeddings = [torch.mean(x_out, dim=0) for x_out, _ in embeddings]
-        contrast = contrastive_loss(pooled_embeddings)
+        contrast = contrastive_loss(pooled_embeddings, margin=args.contrast_margin)
         
         loss = (args.lambda_focal * focal + 
                 args.lambda_recon * recon + 
